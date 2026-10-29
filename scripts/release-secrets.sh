@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Store the release workflow's signing and notarization secrets on GitHub, from this Mac. Run it yourself; it prints no
-# secret, and removes every file it makes.
+# Store the release workflow's signing, notarization and Homebrew secrets on GitHub, from this Mac. Run it yourself; it
+# prints no secret, and removes every file it makes.
 #
 #   scripts/release-secrets.sh                     the Developer ID certificate (and its password)
 #   scripts/release-secrets.sh --p8 ~/Downloads/AuthKey_ABC123.p8 --key-id ABC123 --issuer-id <uuid>
 #                                                  the notarization API key too
+#   scripts/release-secrets.sh --tap               only the token that lets releases update mpdreamz/homebrew-tap
+#                                                  (asked for, not shown: a fine-grained token with contents:write there)
 #
 # The certificate: macOS asks to allow exporting your keychain's signing identities. Only the "Developer ID
 # Application" certificate and its private key are kept, repackaged with a random password in the format a CI
@@ -13,14 +15,15 @@ set -euo pipefail
 
 repo="mpdreamz/yabai"
 openssl=/usr/bin/openssl # LibreSSL: reads what `security export` writes without -legacy, writes what `security import` reads
-p8="" key_id="" issuer_id=""
+p8="" key_id="" issuer_id="" tap=false
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --p8) p8="$2"; shift 2 ;;
     --key-id) key_id="$2"; shift 2 ;;
     --issuer-id) issuer_id="$2"; shift 2 ;;
-    -h | --help) sed -n '2,11p' "$0"; exit 0 ;;
+    --tap) tap=true; shift ;;
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "release-secrets: unknown argument $1 (see --help)" >&2; exit 1 ;;
   esac
 done
@@ -30,6 +33,14 @@ if [ -n "$p8$key_id$issuer_id" ] && { [ -z "$p8" ] || [ -z "$key_id" ] || [ -z "
 fi
 [ -z "$p8" ] || [ -f "$p8" ] || { echo "release-secrets: no file $p8" >&2; exit 1; }
 gh auth status >/dev/null 2>&1 || { echo "release-secrets: sign in to gh first (gh auth login)" >&2; exit 1; }
+
+# The tap token: asked for by gh, which reads it without echoing it.
+if $tap; then
+  echo "release-secrets: paste a token that can push to mpdreamz/homebrew-tap (contents: write), then return"
+  gh secret set HOMEBREW_TAP_TOKEN --repo "$repo"
+  echo "release-secrets: HOMEBREW_TAP_TOKEN stored on $repo"
+  exit 0
+fi
 
 umask 077
 work="$(mktemp -d)"
@@ -102,4 +113,3 @@ fi
 echo "release-secrets: stored on $repo:"
 gh secret list --repo "$repo"
 [ -n "$p8" ] || echo "release-secrets: the notarization key is still to do: run again with --p8, --key-id and --issuer-id"
-echo "release-secrets: the tap needs HOMEBREW_TAP_TOKEN too (the one yabar uses): gh secret set HOMEBREW_TAP_TOKEN --repo $repo"

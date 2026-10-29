@@ -160,7 +160,7 @@ jobs:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
-            echo "::warning::No HOMEBREW_TAP_TOKEN: the tap was not updated. Run the tap workflow once it is set."
+            echo "::warning::No HOMEBREW_TAP_TOKEN: the tap was not updated. Store it (scripts/release-secrets.sh --tap), then run the tap workflow."
             exit 0
           fi
           scripts/bump-tap.sh "$VERSION"
