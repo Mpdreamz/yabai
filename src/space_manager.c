@@ -922,6 +922,66 @@ enum space_op_error space_manager_move_space_to_display(struct space_manager *sm
     return SPACE_OP_ERROR_SCRIPTING_ADDITION;
 }
 
+//
+// NOTE: macOS 27 no longer acts on the public gesture fields of a synthesized Dock swipe. It wants
+// the raw IOHID payload that iss_augment_dock_swipe_event attaches (field 4205), and ignores the
+// DockControl event unless a gesture event follows it. The progress is the smallest non-zero 16.16
+// value, so there is nothing to animate, and only the ended phase carries the fling. The Dock reads
+// the sign through the natural scrolling preference: moving right is negative with natural
+// scrolling on, positive with it off.
+//
+// :Attribution
+// https://github.com/jurplel/InstantSpaceSwitcher (iss_post_modern_dock_swipe in Sources/ISS/ISS.c)
+//
+
+static double space_manager_dock_swipe_sign(float direction)
+{
+    CFPreferencesAppSynchronize(kCFPreferencesAnyApplication);
+
+    Boolean valid = false;
+    Boolean natural = CFPreferencesGetAppBooleanValue(CFSTR("com.apple.swipescrolldirection"), kCFPreferencesAnyApplication, &valid);
+
+    double sign = direction > 0 ? -1.0 : 1.0;
+    return (!valid || natural) ? sign : -sign;
+}
+
+static bool space_manager_post_augmented_dock_swipe(int phase, double sign)
+{
+    CGEventRef event = CGEventCreate(NULL);
+    if (!event) return false;
+
+    CGEventSetIntegerValueField(event, /* kCGSEventTypeField               */  55, /* kCGSEventDockControl       */ 30);
+    CGEventSetIntegerValueField(event, /* kCGEventGestureHIDType           */ 110, /* kIOHIDEventTypeDockSwipe   */ 23);
+    CGEventSetIntegerValueField(event, /* kCGEventGesturePhase             */ 132, phase);
+    CGEventSetIntegerValueField(event, /* kCGEventGestureSwipeMotion       */ 123, /* kCGGestureMotionHorizontal */  1);
+    CGEventSetDoubleValueField(event,  /* kCGEventGestureSwipeProgress     */ 124, sign * 0.000016);
+    CGEventSetIntegerValueField(event, /* kCGEventGesturePhaseAlias        */ 134, phase);
+    CGEventSetDoubleValueField(event,  /* kCGEventGestureZoomDeltaY        */ 138, 3.0);
+    CGEventSetDoubleValueField(event,  /* kCGEventSourceUnixProcessIDAlias */ 169, (double) mach_absolute_time());
+    CGEventSetDoubleValueField(event,  /* kCGEventGestureSwipePositionX    */ 125, 0.1);
+    if (phase == /* kCGSGesturePhaseEnded */ 4) {
+        CGEventSetDoubleValueField(event, /* kCGEventGestureSwipeVelocityX */ 129, sign * 9999.0);
+    }
+
+    CGEventRef augmented = iss_augment_dock_swipe_event(event);
+    CFRelease(event);
+    if (!augmented) return false;
+
+    CGEventRef companion = CGEventCreate(NULL);
+    if (!companion) {
+        CFRelease(augmented);
+        return false;
+    }
+    CGEventSetIntegerValueField(companion, /* kCGSEventTypeField */ 55, /* kCGSEventGesture */ 29);
+
+    CGEventPost(kCGSessionEventTap, augmented);
+    CGEventPost(kCGSessionEventTap, companion);
+    CFRelease(augmented);
+    CFRelease(companion);
+
+    return true;
+}
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
@@ -952,23 +1012,35 @@ bool space_manager_focus_space_using_gesture(uint32_t new_did, uint64_t new_sid)
     // Technique first observed in practice, and reverse-engineered from, BetterTouchTool.
     //
 
-    CGEventRef event_dock_control = CGEventCreate(NULL);
-    if (!event_dock_control) return false;
-
     float sign = (new_index - cur_index) > 0 ? 1.0 : -1.0;
-    CGEventSetIntegerValueField(event_dock_control, /* kCGSEventTypeField            */  55, /* kCGSEventDockControl       */ 30);
-    CGEventSetIntegerValueField(event_dock_control, /* kCGEventGestureHIDType        */ 110, /* kIOHIDEventTypeDockSwipe   */ 23);
-    CGEventSetIntegerValueField(event_dock_control, /* kCGEventGestureSwipeMotion    */ 123, /* kCGGestureMotionHorizontal */  1);
-    CGEventSetDoubleValueField(event_dock_control,  /* kCGEventGestureSwipeProgress  */ 124, sign);
-    CGEventSetDoubleValueField(event_dock_control,  /* kCGEventGestureSwipeVelocityX */ 129, sign * 9999.0);
 
-    for (int i = 0; i < count; ++i) {
-        CGEventSetIntegerValueField(event_dock_control, /* kCGEventGesturePhase */ 132, /* kCGSGesturePhaseBegan */ 1);
-        CGEventPost(kCGSessionEventTap, event_dock_control);
-        CGEventSetIntegerValueField(event_dock_control, /* kCGEventGesturePhase */ 132, /* kCGSGesturePhaseEnded */ 4);
-        CGEventPost(kCGSessionEventTap, event_dock_control);
+    if (iss_requires_event_augmentation()) {
+        double dock_sign = space_manager_dock_swipe_sign(sign);
+        for (int i = 0; i < count; ++i) {
+            if (!space_manager_post_augmented_dock_swipe(/* kCGSGesturePhaseBegan   */ 1, dock_sign) ||
+                !space_manager_post_augmented_dock_swipe(/* kCGSGesturePhaseChanged */ 2, dock_sign) ||
+                !space_manager_post_augmented_dock_swipe(/* kCGSGesturePhaseEnded   */ 4, dock_sign)) {
+                return false;
+            }
+        }
+    } else {
+        CGEventRef event_dock_control = CGEventCreate(NULL);
+        if (!event_dock_control) return false;
+
+        CGEventSetIntegerValueField(event_dock_control, /* kCGSEventTypeField            */  55, /* kCGSEventDockControl       */ 30);
+        CGEventSetIntegerValueField(event_dock_control, /* kCGEventGestureHIDType        */ 110, /* kIOHIDEventTypeDockSwipe   */ 23);
+        CGEventSetIntegerValueField(event_dock_control, /* kCGEventGestureSwipeMotion    */ 123, /* kCGGestureMotionHorizontal */  1);
+        CGEventSetDoubleValueField(event_dock_control,  /* kCGEventGestureSwipeProgress  */ 124, sign);
+        CGEventSetDoubleValueField(event_dock_control,  /* kCGEventGestureSwipeVelocityX */ 129, sign * 9999.0);
+
+        for (int i = 0; i < count; ++i) {
+            CGEventSetIntegerValueField(event_dock_control, /* kCGEventGesturePhase */ 132, /* kCGSGesturePhaseBegan */ 1);
+            CGEventPost(kCGSessionEventTap, event_dock_control);
+            CGEventSetIntegerValueField(event_dock_control, /* kCGEventGesturePhase */ 132, /* kCGSGesturePhaseEnded */ 4);
+            CGEventPost(kCGSessionEventTap, event_dock_control);
+        }
+        CFRelease(event_dock_control);
     }
-    CFRelease(event_dock_control);
 
     if (focus_display) {
         display_manager_set_active_display_id(new_did);
