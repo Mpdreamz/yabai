@@ -1,3 +1,19 @@
+> [!NOTE]
+> **This fork:** [asmvik/yabai](https://github.com/asmvik/yabai) with the macOS 27 (Golden Gate) fixes reported in the
+> upstream issues, on the `macos-27` branch, until upstream supports macOS 27:
+>
+> - the scripting addition on 27.0 through 27.2 (AhsanFazal, [#2802](https://github.com/asmvik/yabai/issues/2802)),
+>   with the space-handler NULL guards from LCS-Dev-Ergos ([#2832](https://github.com/asmvik/yabai/issues/2832))
+> - `space --focus` and `space --display` fail when nothing happened instead of reporting success (from thienel,
+>   [#2844](https://github.com/asmvik/yabai/issues/2844)), so yabai falls back to synthesized Dock swipes
+> - those swipes work again on macOS 27 (from [InstantSpaceSwitcher](https://github.com/jurplel/InstantSpaceSwitcher))
+>
+> Moving spaces between displays does not work on 27.2: Apple removed the Dock code yabai used for it.
+>
+> Install: `brew uninstall asmvik/formulae/yabai` (if you have it), then `brew install --cask mpdreamz/tap/yabai`,
+> and write the sudoers rule for `--load-sa` again, since the binary changed. Releases are signed with a Developer ID
+> and notarized (`.github/workflows/release.yml`).
+
 <!-- Please be careful editing the below HTML, as GitHub is quite finicky with anything that looks like an HTML tag in GitHub Flavored Markdown. -->
 <p align="center">
   <img width="75%" src="assets/banner/banner.svg" alt="Banner">
