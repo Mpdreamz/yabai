@@ -446,8 +446,16 @@ static bool scripting_addition_send_bytes(char *bytes, int length)
     if (socket_open(&sockfd)) {
         if (socket_connect(sockfd, g_sa_socket_file)) {
             if (send(sockfd, bytes, length, 0) != -1) {
-                recv(sockfd, &dummy, 1, 0);
-                result = true;
+                //
+                // NOTE: The payload answers a space focus or move with whether it happened (1) or not (0);
+                // for everything else the read just waits for the payload to close the connection.
+                //
+
+                int received = recv(sockfd, &dummy, 1, 0);
+                char op = bytes[sizeof(int16_t)];
+                result = op == SA_OPCODE_SPACE_FOCUS || op == SA_OPCODE_SPACE_MOVE
+                       ? received == 1 && dummy == 1
+                       : true;
             }
         }
 
